@@ -2,6 +2,7 @@ from fastapi import BackgroundTasks, FastAPI
 
 from PIL import Image
 from pillow_heif import register_heif_opener
+from PIL.ExifTags import TAGS, GPSTAGS, IFD
 
 import datetime
 
@@ -201,8 +202,15 @@ def import_scanned():
 
             image_db.width, image_db.height = image.size
 
+            exif = image.getexif()
+            exif = {TAGS.get(k, k): v for k, v in exif.items()}
+
+            if 'DateTime' in exif:
+                date = datetime.datetime.strptime(
+                    exif['DateTime'], '%Y:%m:%d %H:%M:%S')
+                image_db.taken_date = date
+
             image_db.phash = imagehash.average_hash(image)
-            # image.getexif()
         except OSError:
             print("Cannot get meta for", image_db.path)
 
@@ -229,7 +237,7 @@ def import_files(background_tasks: BackgroundTasks):
 @app.get("/")
 def read_main():
     result_response = []
-    all_images = ImageFile.select()
+    all_images = ImageFile.select().order_by(ImageFile.taken_date.desc())
     # .limit(100)
 
     file: ImageFile
@@ -289,12 +297,3 @@ def get_tasks():
 
 
 db.create_tables([File, ImageFile, VideoFile, TextFile], safe=True)
-
-# if get_mimetype(originFile).startswith('video'):
-#     (
-#         ffmpeg
-#         .input(originFile, ss=time)
-#         # .filter('scale', width, -1)
-#         .output(thumbnail_path, vframes=1)
-#         .run()
-#     )
