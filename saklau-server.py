@@ -1,4 +1,5 @@
-from fastapi import BackgroundTasks, FastAPI
+import io
+from fastapi import BackgroundTasks, FastAPI, Request
 
 from PIL import Image
 from pillow_heif import register_heif_opener
@@ -11,7 +12,7 @@ from os import walk, path, makedirs
 import time
 from enum import StrEnum
 
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 import ffmpeg
@@ -281,12 +282,24 @@ def sha256sum(file_path):
 
 
 @app.get("/file/{file_path:path}")
-def read_file(file_path: str):
+def read_file(file_path: str, request: Request):
     real_path = './' + file_path
 
     if not path.exists(real_path):
         print('There is no cache for this file:', real_path)
         return
+    
+    user_agent = request.headers.get("user-agent")
+    if "Chrome" in user_agent and file_path.endswith("heic"):
+        try:
+            pil_image = Image.open(real_path)
+            pil_image.thumbnail((3840, 2160), Image.Resampling.LANCZOS)
+            img_io = io.BytesIO()
+            pil_image.save(img_io, format="JPEG")
+            img_io.seek(0)
+            return StreamingResponse(io.BytesIO(img_io.read()), media_type="image/jpeg")
+        except OSError as error:
+            print('Error while HEIC conversion to png', error)
 
     return FileResponse(real_path)
 
