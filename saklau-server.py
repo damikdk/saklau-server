@@ -3,7 +3,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 
 from PIL import Image
 from pillow_heif import register_heif_opener
-from PIL.ExifTags import TAGS, GPSTAGS, IFD
+from PIL.ExifTags import TAGS, GPSTAGS
 
 import datetime
 
@@ -70,6 +70,7 @@ class ImageFile(File):
     width = IntegerField(default=0)
     phash = CharField(default="", max_length=64)
     taken_date = DateTimeField(default=datetime.datetime.min)
+    geo = CharField(default="", max_length=64)
 
 
 class VideoFile(File):
@@ -203,13 +204,16 @@ def import_scanned():
 
             image_db.width, image_db.height = image.size
 
-            exif = image.getexif()
-            exif = {TAGS.get(k, k): v for k, v in exif.items()}
+            exif_raw = image.getexif()
+            exif = {TAGS.get(k, k): v for k, v in exif_raw.items()}
 
             if 'DateTime' in exif:
                 date = datetime.datetime.strptime(
                     exif['DateTime'], '%Y:%m:%d %H:%M:%S')
                 image_db.taken_date = date
+
+            if 'GPSInfo' in exif:
+                image_db.geo = get_coordinates(get_geo(exif_raw))
 
             image_db.phash = imagehash.average_hash(image)
         except OSError:
@@ -288,7 +292,7 @@ def read_file(file_path: str, request: Request):
     if not path.exists(real_path):
         print('There is no cache for this file:', real_path)
         return
-    
+
     user_agent = request.headers.get("user-agent")
     if "Chrome" in user_agent and file_path.endswith("heic"):
         try:
@@ -310,3 +314,37 @@ def get_tasks():
 
 
 db.create_tables([File, ImageFile, VideoFile, TextFile], safe=True)
+
+
+def get_geo(exif):
+    for key, value in TAGS.items():
+        if value == "GPSInfo":
+            break
+    gps_info = exif.get_ifd(key)
+    return {
+        GPSTAGS.get(key, key): value
+        for key, value in gps_info.items()
+    }
+
+
+def get_decimal_from_dms(dms, ref):
+    degrees = dms[0]
+    minutes = dms[1] / 60.0
+    seconds = dms[2] / 3600.0
+
+    if ref in ['S', 'W']:
+        degrees = -degrees
+        minutes = -minutes
+        seconds = -seconds
+
+    return round(degrees + minutes + seconds, 5)
+
+
+def get_coordinates(geotags):
+    lat = get_decimal_from_dms(
+        geotags['GPSLatitude'], geotags['GPSLatitudeRef'])
+
+    lon = get_decimal_from_dms(
+        geotags['GPSLongitude'], geotags['GPSLongitudeRef'])
+
+    return (lat, lon)
