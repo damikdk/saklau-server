@@ -6,6 +6,7 @@ from pillow_heif import register_heif_opener
 from PIL.ExifTags import TAGS, GPSTAGS
 
 import datetime
+import math
 
 from peewee import SqliteDatabase, Model, CharField, UUIDField, FloatField, DateTimeField, IntegerField
 from os import walk, path, makedirs
@@ -279,6 +280,15 @@ def import_scanned():
                     date = datetime.datetime.fromisoformat(creation_time)
                     video_db.taken_date = date
 
+            if "side_data_list" in video_stream and len(video_stream['side_data_list']) > 0:
+                side_data = video_stream['side_data_list'][0]
+                if "rotation" in side_data:
+                    rotation = side_data['rotation']
+                    true_width, true_height = calculate_true_resolution(
+                        video_stream['width'], video_stream['height'], rotation)
+                    video_db.width = true_width
+                    video_db.height = true_height
+
             # print(f"framerate={info['streams'][0]['avg_frame_rate']}")
         except OSError as error:
             print(error)
@@ -416,3 +426,15 @@ def get_coordinates(geotags):
         geotags['GPSLongitude'], geotags['GPSLongitudeRef'])
 
     return (lat, lon)
+
+
+def calculate_true_resolution(width, height, rotation):
+    if rotation % 180 == 0:
+        return width, height
+    else:
+        radians = math.radians(rotation)
+        new_width = abs(width * math.cos(radians)) + \
+            abs(height * math.sin(radians))
+        new_height = abs(width * math.sin(radians)) + \
+            abs(height * math.cos(radians))
+        return int(new_width), int(new_height)
