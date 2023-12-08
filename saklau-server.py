@@ -39,7 +39,7 @@ app.add_middleware(
 db = SqliteDatabase("data.db")
 
 THUMBNAIL_SIZE = (256, 256)
-THUMB_FOLDER_NAME = 'cache'
+THUMB_FOLDER = 'cache'
 THUMB_FORMAT = 'jpg'
 HERE_PATH = '.'
 
@@ -95,7 +95,7 @@ def scan():
     status = 'Scanning...'
 
     for dirpath, dirnames, filenames in walk(HERE_PATH):
-        if dirpath.startswith('./' + THUMB_FOLDER_NAME):
+        if dirpath.startswith('./' + THUMB_FOLDER):
             continue
 
         for filename in filenames:
@@ -133,8 +133,7 @@ def scan():
             status = 'Scanning... ' + str(len(new_items)) + ' new files'
 
     total_time = round(time.time() - start_scan, 2)
-    finish_string = 'Scan of ' + \
-        str(len(new_items)) + ' is over in ' + str(total_time)
+    finish_string = f'Last scan: {total_time} secs ({len(new_items)} files)'
     print(finish_string)
     status = finish_string
 
@@ -148,52 +147,43 @@ def thumb():
     start_thumb = time.time()
 
     all_images = ImageFile.select()
-    all_count = len(all_images)
-    thumbnailed_count = 0
-
-    status = 'Thumbnailing...'
-
-    if not path.exists(THUMB_FOLDER_NAME):
-        makedirs(THUMB_FOLDER_NAME)
-
-    for image_db in all_images:
-        try:
-            thumbnail_path = path.join(
-                THUMB_FOLDER_NAME, str(image_db.id)) + '.jpg'
-
-            if path.exists(thumbnail_path):
-                # print('Already cached:', file_path)
-                continue
-
-            with Image.open(image_db.path) as originFile:
-                originFile.thumbnail(THUMBNAIL_SIZE)
-                originFile.save(thumbnail_path)
-        except OSError as error:
-            print("Cannot create thumbnail for", thumbnail_path, error)
-
-        thumbnailed_count += 1
-        status = 'Thumbnailing...' + \
-            str(thumbnailed_count) + '/' + str(all_count)
-
-    total_time = round(time.time() - start_thumb, 2)
-
-    finish_string = 'Thumbnailing of ' + \
-        str(thumbnailed_count) + ' is over in ' + str(total_time)
-    print(finish_string)
-    status = finish_string
-
     all_videos = VideoFile.select()
     # .where(VideoFile.status == FileStatus.SCANNED)
 
-    for video_db in all_videos:
-        thumbnail_path = path.join(
-            THUMB_FOLDER_NAME, str(video_db.id)) + '.webp'
+    all_count = len(all_images) + len(all_videos)
+    thumbed_count = 0
 
-        if path.exists(thumbnail_path):
+    status = 'Thumbnailing...'
+
+    if not path.exists(THUMB_FOLDER):
+        makedirs(THUMB_FOLDER)
+
+    for image_db in all_images:
+        thumb_path = path.join(THUMB_FOLDER, str(image_db.id)) + '.jpg'
+
+        if path.exists(thumb_path):
             # print('Already cached:', file_path)
             continue
 
-        ffmpeg.input(video_db.path).output(thumbnail_path,
+        try:
+
+            with Image.open(image_db.path) as originFile:
+                originFile.thumbnail(THUMBNAIL_SIZE)
+                originFile.save(thumb_path)
+        except OSError as error:
+            print("Cannot create thumbnail for", thumb_path, error)
+
+        thumbed_count += 1
+        status = f'Thumbnailing: {thumbed_count} / {all_count}'
+
+    for video_db in all_videos:
+        thumb_path = path.join(THUMB_FOLDER, str(video_db.id)) + '.webp'
+
+        if path.exists(thumb_path):
+            # print('Already cached:', file_path)
+            continue
+
+        ffmpeg.input(video_db.path).output(thumb_path,
                                            vcodec='libwebp',
                                            vf="fps=fps=10,scale='min(256,iw)':min'(256,ih)':force_original_aspect_ratio=decrease",
                                            lossless=1,
@@ -201,7 +191,16 @@ def thumb():
                                            fps_mode="passthrough",
                                            preset='default',
                                            format='webp',
+                                           loglevel="quiet",
                                            t=2).run()
+
+        thumbed_count += 1
+        status = f'Thumbnailing: {thumbed_count} / {all_count}'
+
+    total_time = round(time.time() - start_thumb, 2)
+    finish_string = f'Last thumbnailing: {total_time} secs {thumbed_count}'
+    print(finish_string)
+    status = finish_string
 
 
 def import_scanned():
@@ -210,7 +209,8 @@ def import_scanned():
     start_import = time.time()
 
     all_images = ImageFile.select().where(ImageFile.status == FileStatus.SCANNED)
-    all_count = len(all_images)
+    all_videos = VideoFile.select()
+    all_count = len(all_images) + len(all_videos)
     imported_count = 0
 
     status = 'Importing...'
@@ -250,16 +250,10 @@ def import_scanned():
 
         status = f'Importing {imported_count} / {all_count}'
 
-    total_time = round(time.time() - start_import, 2)
-
-    finish_string = f'Last import: {total_time} secs ({imported_count})'
-    print(finish_string)
-    status = finish_string
-
-    all_videos = VideoFile.select()
     # .where(VideoFile.status == FileStatus.SCANNED)
 
     for video_db in all_videos:
+        imported_count += 1
         try:
             shaHash = sha256sum(video_db.path)
             video_db.hash = shaHash
@@ -294,6 +288,12 @@ def import_scanned():
             print(error)
 
         video_db.save()
+        print('Video imported:', image_db.path, imported_count, '/', all_count)
+
+    total_time = round(time.time() - start_import, 2)
+    finish_string = f'Last import: {total_time} secs ({imported_count})'
+    print(finish_string)
+    status = finish_string
 
 
 @app.get("/import")
