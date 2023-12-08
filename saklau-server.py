@@ -76,6 +76,9 @@ class ImageFile(File):
 class VideoFile(File):
     duration = FloatField(default=0)
     codec = CharField(default="")
+    height = IntegerField(default=0)
+    width = IntegerField(default=0)
+    taken_date = DateTimeField(default=datetime.datetime.min)
 
 
 class TextFile(File):
@@ -108,19 +111,19 @@ def scan():
             file_size = path.getsize(file_path)
             file_type = get_mimetype(file_path)
 
-            File.create(path=file_path, type=file_type,
-                        file_size=file_size, status=FileStatus.SCANNED)
+            new_file_record = File.create(path=file_path, type=file_type,
+                                          file_size=file_size, status=FileStatus.SCANNED)
 
             match file_type:
                 case 'image':
                     ImageFile.create(path=file_path, type=file_type,
-                                     file_size=file_size, status=FileStatus.SCANNED)
+                                     file_size=file_size, status=FileStatus.SCANNED, id=new_file_record.id)
                 case 'video':
                     VideoFile.create(path=file_path, type=file_type,
-                                     file_size=file_size, status=FileStatus.SCANNED)
+                                     file_size=file_size, status=FileStatus.SCANNED, id=new_file_record.id)
                 case 'text':
                     TextFile.create(path=file_path, type=file_type,
-                                    file_size=file_size, status=FileStatus.SCANNED)
+                                    file_size=file_size, status=FileStatus.SCANNED, id=new_file_record.id)
                 case _:
                     print("Not media file")
 
@@ -138,7 +141,7 @@ def scan():
 
 
 @app.get("/thumb")
-def sync():
+def thumb():
     global status
 
     start_thumb = time.time()
@@ -177,6 +180,27 @@ def sync():
         str(thumbnailed_count) + ' is over in ' + str(total_time)
     print(finish_string)
     status = finish_string
+
+    all_videos = VideoFile.select()
+    # .where(VideoFile.status == FileStatus.SCANNED)
+
+    for video_db in all_videos:
+        thumbnail_path = path.join(
+            THUMB_FOLDER_NAME, str(video_db.id)) + '.webp'
+
+        if path.exists(thumbnail_path):
+            # print('Already cached:', file_path)
+            continue
+
+        ffmpeg.input(video_db.path).output(thumbnail_path,
+                                           vcodec='libwebp',
+                                           vf="fps=fps=10,scale='min(256,iw)':min'(256,ih)':force_original_aspect_ratio=decrease",
+                                           lossless=1,
+                                           loop=0,
+                                           fps_mode="passthrough",
+                                           preset='default',
+                                           format='webp',
+                                           t=2).run()
 
 
 def import_scanned():
@@ -223,14 +247,43 @@ def import_scanned():
         image_db.save()
         print('Image imported:', image_db.path, imported_count, '/', all_count)
 
-        status = 'Importing...' + str(imported_count) + '/' + str(all_count)
+        status = f'Importing {imported_count} / {all_count}'
 
     total_time = round(time.time() - start_import, 2)
 
-    finish_string = 'Import of ' + \
-        str(imported_count) + ' is over in ' + str(total_time)
+    finish_string = f'Last import: {total_time} secs ({imported_count})'
     print(finish_string)
     status = finish_string
+
+    all_videos = VideoFile.select()
+    # .where(VideoFile.status == FileStatus.SCANNED)
+
+    for video_db in all_videos:
+        try:
+            shaHash = sha256sum(video_db.path)
+            video_db.hash = shaHash
+        except OSError:
+            print("Cannot update shaHash for", video_db.path)
+
+        try:
+            info = ffmpeg.probe(video_db.path)
+            video_db.duration = info['format']['duration']
+
+            video_stream = info['streams'][0]
+            video_db.width = video_stream['width']
+            video_db.height = video_stream['height']
+
+            if "tags" in video_stream:
+                if "creation_time" in video_stream['tags']:
+                    creation_time = video_stream['tags']['creation_time']
+                    date = datetime.datetime.fromisoformat(creation_time)
+                    video_db.taken_date = date
+
+            # print(f"framerate={info['streams'][0]['avg_frame_rate']}")
+        except OSError as error:
+            print(error)
+
+        video_db.save()
 
 
 @app.get("/import")
@@ -242,6 +295,7 @@ def import_files(background_tasks: BackgroundTasks):
 @app.get("/")
 def read_main():
     result_response = []
+
     all_images = ImageFile.select().order_by(ImageFile.taken_date.desc())
     # .limit(100)
 
@@ -253,7 +307,21 @@ def read_main():
             'width': file.width,
             'height': file.height,
             'status': file.status,
-            'id': file.id
+            'id': file.id,
+            "taken_date": file.taken_date
+        })
+
+    all_videos = VideoFile.select().order_by(VideoFile.taken_date.desc())
+    file: VideoFile
+    for file in all_videos:
+        result_response.append({
+            'path': file.path,
+            'type': file.type,
+            'width': file.width,
+            'height': file.height,
+            'status': file.status,
+            'id': file.id,
+            "taken_date": file.taken_date
         })
 
     return result_response
