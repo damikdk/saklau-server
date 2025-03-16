@@ -3,3 +3,5 @@
 *.db
 /cache
 /media
+venv/
+__pycache__

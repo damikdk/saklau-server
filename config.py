@@ -1,0 +1,5 @@
+THUMBNAIL_SIZE = (256, 256)
+THUMB_FOLDER = 'cache'
+THUMB_FORMAT = 'jpg'
+HERE_PATH = '.'
+DEFAULT_STATUS = 'nothing new'
